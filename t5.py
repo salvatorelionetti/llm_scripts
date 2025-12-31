@@ -5,12 +5,21 @@ import threading
 import time
 import whisper
 import numpy
+import ollama
+#import piper
 
 FORMAT = pyaudio.paInt16
 CHANNELS = 2
 RATE = 44100
 CHUNK = 1024
 WAVE_OUTPUT_FILENAME = "file.wav"
+
+#llm_name = 'ministral-3:3b'
+#llm_name = 'gemma3:270m'
+llm_name = 'gemma3:1b'
+
+#whisper_model = 'base.en'
+whisper_model = 'small'
 
 class Assistant:
     def __init__(self, do_audio=True, audio_filename=None):
@@ -25,10 +34,11 @@ class Assistant:
             self.audio = pyaudio.PyAudio()
 
         print("Loading the audio model...\n")
-        self.audio_model = whisper.load_model("base.en")
+        self.audio_model = whisper.load_model(whisper_model)
         print("Model loaded.\n")
 
     def help(self):
+        print('')
         print('Press "q" + [Enter] to quit')
         print('Press [Enter] to start talking.')
         print('Press [Enter] again once finished.')
@@ -95,11 +105,17 @@ class Assistant:
 
     def transcribe(self):
         result = self.audio_model.transcribe(self.audio_filename)
+        print(type(result), result)
         text = result['text'].strip()
         print('Transcription', text)
+        return text
+
+#    def ask_llm(self, text):
 
 if __name__ == '__main__':
     do_audio = '--do_audio' in sys.argv
+    do_speak = '--do_speak' in sys.argv
+    do_llm = '--do_llm' in sys.argv
     with Assistant(do_audio=do_audio, audio_filename=WAVE_OUTPUT_FILENAME) as assistant:
         while True:
             assistant.help()
@@ -109,8 +125,29 @@ if __name__ == '__main__':
 
             print ("start recording")
             assistant.record()
-            input('')
+            res =  input('')
             print ("stop recording")
 
             assistant.stop()
-            assistant.transcribe()
+            if res == 'q':
+                break
+
+            text = assistant.transcribe()
+
+            if not do_llm:
+                continue
+
+            print('Asking to llm', llm_name)
+            stream = ollama.chat(
+                    model = llm_name, 
+                    messages = [{'role': 'user', 'content': text}],
+                    stream = True,
+            )
+            if do_speak:
+                es = PiperVoice.load("en_US-lessac-medium.onnx")
+            for chunk in stream:
+                if do_speak:
+                    es.say(chunk['message']['content'], sync=True)
+                print(chunk['message']['content'], end='', flush=True)
+            stream = None
+            es = None
