@@ -8,6 +8,18 @@ import numpy
 import ollama
 #import piper
 
+# Phrase split
+import re
+import nltk
+import numpy
+
+# Synthesize
+import io
+import requests
+import urllib
+import simpleaudio
+
+
 FORMAT = pyaudio.paInt16
 CHANNELS = 2
 RATE = 44100
@@ -28,6 +40,10 @@ class Assistant:
         self.started = False
         self.t = None
         self.frames = []
+        self.statements = []
+        self.statement = ''
+        self.s = ''
+        self.waving_obj = None
 
         print('Initializing audio...')
         if do_audio:
@@ -57,6 +73,10 @@ class Assistant:
 
     def stop(self):
         print('Stop')
+        self.statements = []
+        self.statement = ''
+        self.s = ''
+        self.waving_obj = None
         if self.t is not None:
             self.started = False
             self.t.join()
@@ -110,6 +130,47 @@ class Assistant:
         print('Transcription', text)
         return text
 
+    @staticmethod
+    def phrase_prepare(t):
+        t1 = t.replace('**', '')
+        t2 = t1.removeprefix('* ').replace('\n* ', '\n')
+        t3 = '\n'.join([el for el in t2.splitlines() if len(el.strip())])
+
+        # Remove the link
+        while True:
+            t4 = re.sub('\[.*\]\(.*\)', '', t3)
+            if t3 == t4:
+                break
+            t3 = t4
+
+        return t3
+
+    def update_statements(self, text, flush=False):
+        self.s += text
+        self.statements = nltk.tokenize.sent_tokenize(self.s)
+        if len(self.statements) > (1 - int(flush)):
+            # Got a statement
+            print('len', [len(el) for el in self.statements])
+            print('sta', self.statements)
+            self.statement = self.statements[0]
+            # Advance the string
+            self.s = self.s[len(self.statement):]
+            print('s  ', self.s[:10])
+            self.synthetize_and_play(self.statement)
+        else:
+            # Statement is accumulating...
+            self.statement = ''
+
+    # curl                        "http://127.0.0.1:5002/api/tts?text=Ciao" --output - | aplay
+    # curl -X POST -d "text=Ciao" "http://127.0.0.1:5002/api/tts?text=Ciao" --output - | aplay
+    def synthetize_and_play(self, text):
+        t = self.phrase_prepare(text)
+        self.res = requests.get('http://127.0.0.1:5002/api/tts?text='+urllib.parse.quote(t, safe=''))
+        if self.waving_obj is not None:
+            self.waving_obj.wait_done()
+        self.wave_obj = simpleaudio.WaveObject.from_wave_file(io.BytesIO(self.res.content))
+        self.waving_obj = self.wave_obj.play()
+        self.wave_obj = None
 #    def ask_llm(self, text):
 
 if __name__ == '__main__':
@@ -143,11 +204,16 @@ if __name__ == '__main__':
                     messages = [{'role': 'user', 'content': text}],
                     stream = True,
             )
-            if do_speak:
-                es = PiperVoice.load("en_US-lessac-medium.onnx")
+#            if do_speak:
+#                es = PiperVoice.load("en_US-lessac-medium.onnx")
             for chunk in stream:
-                if do_speak:
-                    es.say(chunk['message']['content'], sync=True)
-                print(chunk['message']['content'], end='', flush=True)
+#                if do_speak:
+#                    es.say(chunk['message']['content'], sync=True)
+                token = chunk['message']['content']
+                print(token, end='', flush=True)
+                assistant.update_statements(token)
+
+            assistant.update_statements('', flush=True)
+
             stream = None
             es = None
