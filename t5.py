@@ -19,6 +19,8 @@ import requests
 import urllib
 import simpleaudio
 
+#import websockets.exceptions
+import websockets.sync.client
 
 FORMAT = pyaudio.paInt16
 CHANNELS = 2
@@ -33,6 +35,9 @@ llm_name = 'gemma3:1b'
 #whisper_model = 'base.en'
 whisper_model = 'small'
 
+ready_msg = 'Ciao, dimmi tutto, ti ascolto'
+tts_url = 'http://127.0.0.1:5002/api/tts'
+
 class Assistant:
     def __init__(self, do_audio=True, audio_filename=None):
         self.do_audio = do_audio
@@ -44,6 +49,8 @@ class Assistant:
         self.statement = ''
         self.s = ''
         self.waving_obj = None
+        self.websock = None
+        self.websock_msg = None
 
         print('Initializing audio...')
         if do_audio:
@@ -83,6 +90,7 @@ class Assistant:
             self.t = None
         if self.do_audio:
             self.stream = None
+        self.websock_msg = None
 
     def record(self):
         self.started = True
@@ -132,61 +140,123 @@ class Assistant:
 
     @staticmethod
     def phrase_prepare(t):
-        t1 = t.replace('**', '')
-        t2 = t1.removeprefix('* ').replace('\n* ', '\n')
-        t3 = '\n'.join([el for el in t2.splitlines() if len(el.strip())])
+        print(type(t), t.encode()[:16].hex())
+
+        # <class 'str'> 0a202020202a
+        t1 = t.encode('ascii', 'ignore').decode()
+        t2 = t1.replace('**', '')
+        t3 = t2.removeprefix('* ').replace('\n* *', '\n')
+        t4 = '\n'.join([el for el in t3.splitlines() if len(el.strip())])
 
         # Remove the link
         while True:
-            t4 = re.sub('\[.*\]\(.*\)', '', t3)
-            if t3 == t4:
+            t5 = re.sub('\[.*\]\(.*\)', '', t4)
+            if t4 == t5:
                 break
-            t3 = t4
+            t4 = t5
 
-        return t3
+        return t4
 
     def update_statements(self, text, flush=False):
         self.s += text
         self.statements = nltk.tokenize.sent_tokenize(self.s)
         if len(self.statements) > (1 - int(flush)):
             # Got a statement
-            print('len', [len(el) for el in self.statements])
-            print('sta', self.statements)
+            print('\nGot statement: len', [len(el) for el in self.statements], self.statement)
             self.statement = self.statements[0]
             # Advance the string
             self.s = self.s[len(self.statement):]
-            print('s  ', self.s[:10])
+            print('Remaining string:', self.s[:10])
             self.synthetize_and_play(self.statement)
         else:
             # Statement is accumulating...
             self.statement = ''
 
-    # curl                        "http://127.0.0.1:5002/api/tts?text=Ciao" --output - | aplay
-    # curl -X POST -d "text=Ciao" "http://127.0.0.1:5002/api/tts?text=Ciao" --output - | aplay
+    # curl                            "http://127.0.0.1:5002/api/tts?text=Ciao" --output - | aplay
+    # curl -X POST --data-urlencode "text=Ciao" "http://127.0.0.1:5002/api/tts" --output - | aplay
     def synthetize_and_play(self, text):
         t = self.phrase_prepare(text)
-        self.res = requests.get('http://127.0.0.1:5002/api/tts?text='+urllib.parse.quote(t, safe=''))
+        if len(t)<=2:
+            return
+        self.res = requests.get(f'{tts_url}?text='+urllib.parse.quote(t, safe=''))
         if self.waving_obj is not None:
             self.waving_obj.wait_done()
+        print(self.res)
+        print(self.res.content[:30].hex())
         self.wave_obj = simpleaudio.WaveObject.from_wave_file(io.BytesIO(self.res.content))
         self.waving_obj = self.wave_obj.play()
         self.wave_obj = None
 #    def ask_llm(self, text):
 
+    def websock_recv(self, peek=False):
+        msg = self.websock_msg
+
+        # Return previous message is alreay acquired...
+        if msg is not None:
+            if not peek:
+                print('client: cache', msg, peek)
+                self.websock_msg = None
+            return msg
+
+        # 'peek' means return immediately.
+        if peek:
+            timeout = 0
+        else:
+            timeout = None
+            print('client:', 'say the magic word...')
+
+        # TODO: server leave is not managed.
+        try:
+            msg = self.websock.recv(timeout=timeout)
+            # A message is available...
+            if peek:
+                # just store in the cache
+                self.websock_msg = msg
+            else:
+                # Nunzio vobis...
+                print('client: recv', msg)
+        except TimeoutError:
+            # No message available
+            pass
+
+        return msg
+
+    def magic_word_wait(self):
+        if self.websock is None:
+            self.websock = websockets.sync.client.connect("ws://localhost:8765")
+        return self.websock_recv()
+
+    def magic_word_is_waiting(self):
+        # sometimes there is consecutive word recognized.
+        if self.websock_msg is not None:
+            print('magic_word_is_waiting: found unexpected msg', self.websock_msg)
+        #assert(self.websock_msg is None), f'is_waiting: found msg {self.websock_msg}'
+        return self.websock_recv(peek = True) is not None
+        
 if __name__ == '__main__':
     do_audio = '--do_audio' in sys.argv
     do_speak = '--do_speak' in sys.argv
     do_llm = '--do_llm' in sys.argv
+    do_magic_word = '--do_magic_word' in sys.argv
+
     with Assistant(do_audio=do_audio, audio_filename=WAVE_OUTPUT_FILENAME) as assistant:
         while True:
-            assistant.help()
-            res = input('')
-            if res == 'q':
-                break
+            if do_magic_word:
+                assistant.magic_word_wait()
+                os.system(f'curl -X POST --data-urlencode "text={ready_msg}" "{tts_url}" --output - | aplay')
+            else:
+                assistant.help()
+                res = input('')
+                if res == 'q':
+                    break
 
             print ("start recording")
             assistant.record()
-            res =  input('')
+            if do_magic_word:
+                time.sleep(3)
+                res = ''
+            else:
+                res =  input('')
             print ("stop recording")
 
             assistant.stop()
@@ -206,6 +276,7 @@ if __name__ == '__main__':
             )
 #            if do_speak:
 #                es = PiperVoice.load("en_US-lessac-medium.onnx")
+            magic_word_detected = False
             for chunk in stream:
 #                if do_speak:
 #                    es.say(chunk['message']['content'], sync=True)
@@ -213,7 +284,24 @@ if __name__ == '__main__':
                 print(token, end='', flush=True)
                 assistant.update_statements(token)
 
-            assistant.update_statements('', flush=True)
+                # Check if user is asking to start a new question,
+                # then interrupt the response generation.
+                if do_magic_word:
+                    if assistant.magic_word_is_waiting():
+                        magic_word_detected = True
+                        break # TODO is it sufficient?
+
+            if not magic_word_detected:
+                assistant.update_statements('', flush=True)
+            else:
+                if assistant.waving_obj is not None:
+                    if assistant.waving_obj.is_playing():
+                        print('stopping player!')
+                        assistant.waving_obj.stop()
 
             stream = None
             es = None
+
+    if self.websock is not None:
+        print('close: websock...')
+        self.websock.close()
