@@ -1,4 +1,4 @@
-import os
+import os, sys
 
 from eff_word_net.streams import SimpleMicStream
 from eff_word_net.engine import HotwordDetector
@@ -19,6 +19,8 @@ json_path = 'autobot/autobot_ref.json'
 msg = 'Ciao, dimmi tutto, ti ascolto'
 
 do_run = True
+do_respond = '--do_respond' in sys.argv
+
 def audio_fun():
     global clients_q
     base_model = Resnet50_Arc_loss()
@@ -54,7 +56,9 @@ def audio_fun():
             for l, q in enumerate(clients_q):
                 print('advice client', l)
                 q.put(hotword)
-            os.system(f'curl -X POST --data-urlencode "text={msg}" "http://127.0.0.1:5002/api/tts" --output - | aplay')
+
+            if do_respond:
+                os.system(f'curl -X POST --data-urlencode "text={msg}" "http://127.0.0.1:5002/api/tts" --output - | aplay')
 
 server = None
 client_id = 0
@@ -109,6 +113,7 @@ def echo_fun(websocket):
             # Client left, we too...
             client_alive = False
 
+    clients_q.remove(q)
 
 def websock_fun():
     global server
