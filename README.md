@@ -1,11 +1,10 @@
 # llm_scripts
 
 Enjoy an LLM using voice.
-Components are picked up in order to have a low memory usage and possibly not that bad experience.
-- generatio- - -dsadsa
+Components are python based, picked up in order to have a low memory usage and possibly not that bad experience.
+- overlapping of response generation with speech synthesis,
 - possibility to interrupt the current response by re-instating the "trigger word",
-
-
+- "magic word" detection is a service that publish the events via websockets.
 
 This repository currently includes:
 - [create_venv.sh](https://github.com/salvatorelionetti/llm_scripts/blob/main/create_venv.sh) — helper to create and activate a Python virtual environment and install dependencies.
